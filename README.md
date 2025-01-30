@@ -2,6 +2,8 @@
 
 ## genesis_sb3
 
+This is example about RL with Genesis and Stable Baselines 3.
+
 Install dependencies 
 
 ```bash
