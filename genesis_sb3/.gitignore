@@ -1,0 +1,5 @@
+# tensorboard logs
+logs
+
+# model checkpoints
+checkpoints
