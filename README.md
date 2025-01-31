@@ -8,7 +8,6 @@ Install dependencies
 
 ```bash
 pip install 'stable-baselines3[extra]'
-pip install gymnasium
 ```
 
 Run
