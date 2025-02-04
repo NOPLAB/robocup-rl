@@ -170,6 +170,7 @@ class RoboCupEnv(VecEnv):
 
         # reset buffers
         self.last_actions[envs_idx] = 0.0
+        self.episode_length_buf[envs_idx] = 0
 
     def reset(self) -> VecEnvObs:
         self.reset_idx(np.arange(self.num_envs))
