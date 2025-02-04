@@ -146,9 +146,13 @@ class RoboCupEnv(VecEnv):
         rewards += self._reward_lin_vel_y()
 
         # dones
-        dones = np.tile(False, (self.num_envs,))
+        dones = np.zeros((self.num_envs,), dtype=bool)
+        dones |= self.episode_length_buf >= self.max_episode_length
 
-        return (self.obs_buf, rewards, dones, [])
+        infos = []
+        infos = [{"terminal_observation": obs} for obs in self.obs_buf]
+
+        return (self.obs_buf, rewards, dones, infos)
 
     def reset_idx(self, envs_idx):
         if len(envs_idx) == 0:
