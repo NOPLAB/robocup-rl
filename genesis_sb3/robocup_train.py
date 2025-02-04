@@ -34,7 +34,7 @@ def main():
         "MlpPolicy",
         env,
         n_steps=512,
-        batch_size=10240,
+        batch_size=8192,
         verbose=1,
         device="cuda",
         tensorboard_log="logs/robocup",
