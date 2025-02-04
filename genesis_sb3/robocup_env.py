@@ -161,11 +161,11 @@ class RoboCupEnv(VecEnv):
         # reset base
         self.base_pos[envs_idx] = self.base_init_pos
         self.robot.set_pos(
-            self.base_pos[envs_idx], zero_velocity=False, envs_idx=envs_idx
+            self.base_pos[envs_idx], zero_velocity=True, envs_idx=envs_idx
         )
         self.base_quat[envs_idx] = self.base_init_quat.reshape(1, -1)
         self.robot.set_quat(
-            self.base_quat[envs_idx], zero_velocity=False, envs_idx=envs_idx
+            self.base_quat[envs_idx], zero_velocity=True, envs_idx=envs_idx
         )
 
         # reset buffers
