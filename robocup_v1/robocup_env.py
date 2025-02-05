@@ -17,6 +17,7 @@ from genesis.utils.geom import (
     inv_quat,
     transform_quat_by_quat,
 )
+import torch
 
 
 def get_env_cfg():
@@ -83,6 +84,8 @@ class RoboCupEnv(VecEnv):
             ),
         )
 
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         self.num_actions = env_cfg["num_actions"]
         self.num_obs = env_cfg["num_obs"]
 
@@ -119,15 +122,19 @@ class RoboCupEnv(VecEnv):
         )
 
         # add robot
-        self.base_init_pos = np.array(env_cfg["base_init_pos"], dtype=np.float32)
-        self.base_init_quat = np.array(env_cfg["base_init_quat"], dtype=np.float32)
+        self.base_init_pos = torch.tensor(
+            env_cfg["base_init_pos"], dtype=torch.float32, device=self.device
+        )
+        self.base_init_quat = torch.tensor(
+            env_cfg["base_init_quat"], dtype=torch.float32, device=self.device
+        )
         self.inv_base_init_quat = inv_quat(self.base_init_quat)
         self.robot = self.scene.add_entity(
             morph=gs.morphs.Cylinder(
                 height=env_cfg["robot"]["height"],
                 radius=env_cfg["robot"]["radius"],
-                pos=self.base_init_pos,
-                quat=self.base_init_quat,
+                pos=self.base_init_pos.cpu().numpy(),
+                quat=self.base_init_quat.cpu().numpy(),
             ),
             material=gs.materials.Rigid(rho=1400, friction=1e-2),
             surface=gs.surfaces.Plastic(),
@@ -161,19 +168,34 @@ class RoboCupEnv(VecEnv):
 
         # initialize buffers
         self.obs_buf = np.zeros((self.num_envs, self.num_obs), dtype=np.float32)
-        self.rewards = np.zeros((self.num_envs,), dtype=np.float32)
-        self.dones = np.zeros((self.num_envs,), dtype=bool)
         self.actions = np.zeros((self.num_envs, self.num_actions), dtype=np.float32)
         self.last_actions = np.zeros_like(self.actions)
-        self.episode_length_buf = np.zeros((self.num_envs,), dtype=np.int32)
         self.action_scale = env_cfg["action_scale"]
         self.episode_reward_sums = np.zeros((self.num_envs,), dtype=np.float32)
 
-        self.base_lin_vel = np.zeros((self.num_envs, 3), dtype=np.float32)
-        self.base_ang_vel = np.zeros((self.num_envs, 3), dtype=np.float32)
-        self.base_pos = np.zeros((self.num_envs, 3), dtype=np.float32)
-        self.base_quat = np.zeros((self.num_envs, 4), dtype=np.float32)
-        self.base_euler = np.zeros((self.num_envs, 3), dtype=np.float32)
+        self.episode_length_buf = torch.zeros(
+            (self.num_envs,), dtype=torch.int32, device=self.device
+        )
+        self.dones = torch.zeros((self.num_envs,), dtype=torch.bool, device=self.device)
+        self.rewards = torch.zeros(
+            (self.num_envs,), dtype=torch.float32, device=self.device
+        )
+
+        self.base_lin_vel = torch.zeros(
+            (self.num_envs, 3), dtype=torch.float32, device=self.device
+        )
+        self.base_ang_vel = torch.zeros(
+            (self.num_envs, 3), dtype=torch.float32, device=self.device
+        )
+        self.base_pos = torch.zeros(
+            (self.num_envs, 3), dtype=torch.float32, device=self.device
+        )
+        self.base_quat = torch.zeros(
+            (self.num_envs, 4), dtype=torch.float32, device=self.device
+        )
+        self.base_euler = torch.zeros(
+            (self.num_envs, 3), dtype=torch.float32, device=self.device
+        )
 
     def step_async(self, actions: np.ndarray) -> None:
         self.actions = actions
@@ -197,29 +219,25 @@ class RoboCupEnv(VecEnv):
 
         # update buffers
         self.episode_length_buf += 1
-        self.base_pos[:] = self.robot.get_pos().cpu().numpy()
-        self.base_quat[:] = self.robot.get_quat().cpu().numpy()
+        self.base_pos[:] = self.robot.get_pos()
+        self.base_quat[:] = self.robot.get_quat()
         self.base_euler = quat_to_xyz(
             transform_quat_by_quat(
-                np.ones_like(self.base_quat) * self.inv_base_init_quat,
+                torch.ones_like(self.base_quat) * self.inv_base_init_quat,
                 self.base_quat,
             )
         )
         inv_base_quat = inv_quat(self.base_quat)
-        self.base_lin_vel[:] = transform_by_quat(
-            self.robot.get_vel().cpu().numpy(), inv_base_quat
-        )
-        self.base_ang_vel[:] = transform_by_quat(
-            self.robot.get_ang().cpu().numpy(), inv_base_quat
-        )
+        self.base_lin_vel[:] = transform_by_quat(self.robot.get_vel(), inv_base_quat)
+        self.base_ang_vel[:] = transform_by_quat(self.robot.get_ang(), inv_base_quat)
 
         # update observation buffer
         # vector about ball direction
-        ball_vec = self.ball.get_pos().cpu().numpy() - self.base_pos
-        ball_norm = ball_vec / np.linalg.norm(ball_vec, axis=1, keepdims=True)
+        ball_vec = self.ball.get_pos() - self.base_pos
+        ball_norm = ball_vec / torch.linalg.norm(ball_vec, axis=1, keepdims=True)
 
-        self.obs_buf[:, 0] = ball_norm[:, 0]
-        self.obs_buf[:, 1] = ball_norm[:, 1]
+        self.obs_buf[:, 0] = ball_norm[:, 0].cpu().numpy()
+        self.obs_buf[:, 1] = ball_norm[:, 1].cpu().numpy()
 
         # update last actions
         self.last_actions = self.actions
@@ -233,7 +251,9 @@ class RoboCupEnv(VecEnv):
         self.rewards += self._reward_leave_lerning_space_x()
         self.rewards += self._reward_leave_lerning_space_y()
 
-        self.episode_reward_sums += self.rewards
+        rewards_cpu = self.rewards.cpu().numpy()
+
+        self.episode_reward_sums += rewards_cpu
 
         # dones
         self.dones[:] = False
@@ -243,16 +263,18 @@ class RoboCupEnv(VecEnv):
         self.dones |= self._reward_leave_lerning_space_x() != 0.0
         self.dones |= self._reward_leave_lerning_space_y() != 0.0
 
+        dones_cpu = self.dones.cpu().numpy()
+
         # reset done envs
-        self.reset_idx(np.flatnonzero(self.dones))
+        self.reset_idx(self.dones.nonzero(as_tuple=False).flatten().cpu().numpy())
 
         infos = []
         infos = [{"terminal_observation": obs} for obs in self.obs_buf]
 
         return (
             self.obs_buf,
-            self.rewards,
-            self.dones,
+            rewards_cpu,
+            dones_cpu,
             infos,
         )
 
@@ -272,12 +294,14 @@ class RoboCupEnv(VecEnv):
         self.base_lin_vel[envs_idx] = 0
         self.base_ang_vel[envs_idx] = 0
 
-        # reset ball
-        ball_pos = np.random.uniform(
-            low=[-1.0 + 0.3, -1.58 / 2 + 0.3, 0.1],
-            high=[2.19 / 2 - 0.3, 1.58 / 2 - 0.3, 0.1],
-            size=(len(envs_idx), 3),
+        ball_pos = torch.rand(
+            (len(envs_idx), 3),
+            dtype=torch.float32,
+            device=self.device,
         )
+        ball_pos[:, 0] = ball_pos[:, 0] * 3.19 - 1.0
+        ball_pos[:, 1] = ball_pos[:, 1] * 3.16 - 1.58 / 2
+        ball_pos[:, 2] = 0.1
         self.ball.set_pos(ball_pos, zero_velocity=True, envs_idx=envs_idx)
 
         # reset buffers
@@ -300,25 +324,25 @@ class RoboCupEnv(VecEnv):
     #     return np.where(self.base_pos[:, 0] > 2.19 / 2, 5.0, 0.0)
 
     def _reward_touch_ball(self):
-        ball_pos = self.ball.get_pos().cpu().numpy()
-        dist = np.linalg.norm(ball_pos - self.base_pos, axis=1)
-        return np.where(dist < 0.3, 10.0, 0.0)
+        ball_pos = self.ball.get_pos()
+        dist = torch.linalg.norm(ball_pos - self.base_pos, axis=1)
+        return torch.where(dist < 0.3, 10.0, 0.0)
 
     def _reward_near_ball(self):
-        ball_pos = self.ball.get_pos().cpu().numpy()
-        dist = np.linalg.norm(ball_pos - self.base_pos, axis=1)
-        return (1.0 / dist) / 50
+        ball_pos = self.ball.get_pos()
+        dist = torch.linalg.norm(ball_pos - self.base_pos, axis=1)
+        return (1.0 / dist) / 50.0
 
     def _reward_leave_lerning_space_x(self):
-        return np.where(
-            np.abs(self.base_pos[:, 0]) > 2.19 / 2,
+        return torch.where(
+            torch.abs(self.base_pos[:, 0]) > 2.19 / 2,
             -5.0,
             0.0,
         )
 
     def _reward_leave_lerning_space_y(self):
-        return np.where(
-            np.abs(self.base_pos[:, 1]) > 1.58 / 2,
+        return torch.where(
+            torch.abs(self.base_pos[:, 1]) > 1.58 / 2,
             -5.0,
             0.0,
         )
