@@ -245,11 +245,11 @@ class RoboCupEnv(VecEnv):
         # rewards
         self.rewards[:] = 0.0
         self.rewards += self._reward_every_step()
-        # self.rewards += self._reward_goal()
-        self.rewards += self._reward_touch_ball()
+        self.rewards += self._reward_goal()
+        # self.rewards += self._reward_touch_ball()
         self.rewards += self._reward_near_ball()
-        self.rewards += self._reward_leave_lerning_space_x()
-        self.rewards += self._reward_leave_lerning_space_y()
+        # self.rewards += self._reward_leave_lerning_space_x()
+        # self.rewards += self._reward_leave_lerning_space_y()
 
         rewards_cpu = self.rewards.cpu().numpy()
 
@@ -258,10 +258,10 @@ class RoboCupEnv(VecEnv):
         # dones
         self.dones[:] = False
         self.dones |= self.episode_length_buf >= self.max_episode_length
-        # self.dones |= self._reward_goal() > 0.0
-        self.dones |= self._reward_touch_ball() != 0.0
-        self.dones |= self._reward_leave_lerning_space_x() != 0.0
-        self.dones |= self._reward_leave_lerning_space_y() != 0.0
+        self.dones |= self._reward_goal() > 0.0
+        # self.dones |= self._reward_touch_ball() != 0.0
+        # self.dones |= self._reward_leave_lerning_space_x() != 0.0
+        # self.dones |= self._reward_leave_lerning_space_y() != 0.0
 
         dones_cpu = self.dones.cpu().numpy()
 
@@ -283,7 +283,17 @@ class RoboCupEnv(VecEnv):
             return
 
         # reset base
-        self.base_pos[envs_idx] = self.base_init_pos
+        self.base_pos[envs_idx] = (
+            torch.from_numpy(
+                np.random.uniform(
+                    low=[-2.19 / 2 + 0.3, -1.58 / 2 + 0.3, 0.06],
+                    high=[2.19 / 2 - 0.3, 1.58 / 2 - 0.3, 0.06],
+                    size=(len(envs_idx), 3),
+                )
+            )
+            .to(torch.float32)
+            .cuda()
+        )
         self.robot.set_pos(
             self.base_pos[envs_idx], zero_velocity=True, envs_idx=envs_idx
         )
@@ -294,14 +304,11 @@ class RoboCupEnv(VecEnv):
         self.base_lin_vel[envs_idx] = 0
         self.base_ang_vel[envs_idx] = 0
 
-        ball_pos = torch.rand(
-            (len(envs_idx), 3),
-            dtype=torch.float32,
-            device=self.device,
+        ball_pos = np.random.uniform(
+            low=[-2.19 / 2 + 0.3, -1.58 / 2 + 0.3, 0.1],
+            high=[2.19 / 2 - 0.3, 1.58 / 2 - 0.3, 0.1],
+            size=(len(envs_idx), 3),
         )
-        ball_pos[:, 0] = ball_pos[:, 0] * 3.19 - 1.0
-        ball_pos[:, 1] = ball_pos[:, 1] * 3.16 - 1.58 / 2
-        ball_pos[:, 2] = 0.1
         self.ball.set_pos(ball_pos, zero_velocity=True, envs_idx=envs_idx)
 
         # reset buffers
@@ -320,8 +327,9 @@ class RoboCupEnv(VecEnv):
     def _reward_every_step(self):
         return -0.02
 
-    # def _reward_goal(self):
-    #     return np.where(self.base_pos[:, 0] > 2.19 / 2, 5.0, 0.0)
+    def _reward_goal(self):
+        ball_pos = self.ball.get_pos()
+        return torch.where(ball_pos[:, 0] > 2.19 / 2, 5.0, 0.0)
 
     def _reward_touch_ball(self):
         ball_pos = self.ball.get_pos()
