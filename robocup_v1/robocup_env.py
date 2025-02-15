@@ -253,7 +253,7 @@ class RoboCupEnv(VecEnv):
         # update observation buffer
 
         # vector about ball direction
-        ball_vec = self.ball.get_pos() - self.base_pos
+        ball_vec = self.ball_pos - self.base_pos
         ball_norm = ball_vec / torch.linalg.norm(ball_vec, axis=1, keepdims=True)
 
         # goal direction
@@ -276,10 +276,10 @@ class RoboCupEnv(VecEnv):
         self.rewards += self._reward_goal()
         # self.rewards += self._reward_touch_ball()
         self.rewards += self._reward_near_ball()
-        self.rewards += self._reward_ball_leave_lerning_space_x()
-        self.rewards += self._reward_ball_leave_lerning_space_y()
-        self.rewards += self._reward_robot_leave_lerning_space_x()
-        self.rewards += self._reward_robot_leave_lerning_space_y()
+        self.rewards += self._reward_ball_leave_learning_space_x()
+        self.rewards += self._reward_ball_leave_learning_space_y()
+        self.rewards += self._reward_robot_leave_learning_space_x()
+        self.rewards += self._reward_robot_leave_learning_space_y()
 
         rewards_cpu = self.rewards.cpu().numpy()
 
@@ -290,10 +290,10 @@ class RoboCupEnv(VecEnv):
         self.dones |= self.episode_length_buf >= self.max_episode_length
         self.dones |= self._reward_goal() != 0.0
         # self.dones |= self._reward_touch_ball() != 0.0
-        self.dones |= self._reward_ball_leave_lerning_space_x() != 0.0
-        self.dones |= self._reward_ball_leave_lerning_space_y() != 0.0
-        self.dones |= self._reward_robot_leave_lerning_space_x() != 0.0
-        self.dones |= self._reward_robot_leave_lerning_space_y() != 0.0
+        self.dones |= self._reward_ball_leave_learning_space_x() != 0.0
+        self.dones |= self._reward_ball_leave_learning_space_y() != 0.0
+        self.dones |= self._reward_robot_leave_learning_space_x() != 0.0
+        self.dones |= self._reward_robot_leave_learning_space_y() != 0.0
 
         dones_cpu = self.dones.cpu().numpy()
 
@@ -337,12 +337,20 @@ class RoboCupEnv(VecEnv):
         self.base_ang_vel[envs_idx] = 0
 
         # reset ball
-        self.ball_pos = np.random.uniform(
-            low=[-2.19 / 2 + 0.3, -1.58 / 2 + 0.3, 0.1],
-            high=[2.19 / 2 - 0.3, 1.58 / 2 - 0.3, 0.1],
-            size=(len(envs_idx), 3),
+        self.ball_pos[envs_idx] = (
+            torch.from_numpy(
+                np.random.uniform(
+                    low=[-2.19 / 2 + 0.3, -1.58 / 2 + 0.3, 0.1],
+                    high=[2.19 / 2 - 0.3, 1.58 / 2 - 0.3, 0.1],
+                    size=(len(envs_idx), 3),
+                )
+            )
+            .to(torch.float32)
+            .cuda()
         )
-        self.ball.set_pos(self.ball_pos, zero_velocity=True, envs_idx=envs_idx)
+        self.ball.set_pos(
+            self.ball_pos[envs_idx], zero_velocity=True, envs_idx=envs_idx
+        )
 
         # reset random force scale
         self.action_scale_noise[envs_idx] = np.random.uniform(
@@ -385,28 +393,28 @@ class RoboCupEnv(VecEnv):
         dist = torch.linalg.norm(self.ball_pos - self.base_pos, axis=1)
         return (1.0 / dist) / 50.0
 
-    def _reward_ball_leave_lerning_space_x(self):
+    def _reward_ball_leave_learning_space_x(self):
         return torch.where(
             torch.abs(self.ball_pos[:, 0]) > 2.19 / 2 - 0.1,
             -2.0,
             0.0,
         )
 
-    def _reward_ball_leave_lerning_space_y(self):
+    def _reward_ball_leave_learning_space_y(self):
         return torch.where(
             torch.abs(self.ball_pos[:, 1]) > 1.58 / 2 - 0.1,
             -2.0,
             0.0,
         )
 
-    def _reward_robot_leave_lerning_space_x(self):
+    def _reward_robot_leave_learning_space_x(self):
         return torch.where(
             torch.abs(self.base_pos[:, 0]) > 2.19 / 2 - 0.1,
             -5.0,
             0.0,
         )
 
-    def _reward_robot_leave_lerning_space_y(self):
+    def _reward_robot_leave_learning_space_y(self):
         return torch.where(
             torch.abs(self.base_pos[:, 1]) > 1.58 / 2 - 0.1,
             -5.0,
