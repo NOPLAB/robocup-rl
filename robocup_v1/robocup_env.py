@@ -28,6 +28,8 @@ def get_env_cfg():
         "base_init_quat": [1.0, 0.0, 0.0, 0.0],
         "clip_actions": 1.0,
         "action_scale": 100.0,
+        "action_scale_noise_min": 0.8,
+        "action_scale_noise_max": 1.2,
         "robot": {
             "height": 0.1,
             "radius": 0.2,
@@ -171,6 +173,13 @@ class RoboCupEnv(VecEnv):
         self.actions = np.zeros((self.num_envs, self.num_actions), dtype=np.float32)
         self.last_actions = np.zeros_like(self.actions)
         self.action_scale = env_cfg["action_scale"]
+        self.action_scale_noise_min = env_cfg["action_scale_noise_min"]
+        self.action_scale_noise_max = env_cfg["action_scale_noise_max"]
+        self.action_scale_noise = np.random.uniform(
+            self.action_scale_noise_min,
+            self.action_scale_noise_max,
+            size=(self.num_envs, 1),
+        )
         self.episode_reward_sums = np.zeros((self.num_envs,), dtype=np.float32)
 
         self.episode_length_buf = torch.zeros(
@@ -204,9 +213,10 @@ class RoboCupEnv(VecEnv):
         exec_actions = (
             self.last_actions if self.simulate_action_latency else self.actions
         )
-        scaled_actions = exec_actions * self.action_scale
+        exec_actions *= self.action_scale
+        exec_actions *= self.action_scale_noise
 
-        force = [[[a[0], a[1], 0.0]] for a in scaled_actions]
+        force = [[[a[0], a[1], 0.0]] for a in exec_actions]
         self.rigid_solver.apply_links_external_force(
             force=force,
             links_idx=[self.robot.idx],
@@ -258,7 +268,7 @@ class RoboCupEnv(VecEnv):
         # dones
         self.dones[:] = False
         self.dones |= self.episode_length_buf >= self.max_episode_length
-        self.dones |= self._reward_goal() > 0.0
+        self.dones |= self._reward_goal() != 0.0
         # self.dones |= self._reward_touch_ball() != 0.0
         # self.dones |= self._reward_leave_lerning_space_x() != 0.0
         # self.dones |= self._reward_leave_lerning_space_y() != 0.0
@@ -304,12 +314,20 @@ class RoboCupEnv(VecEnv):
         self.base_lin_vel[envs_idx] = 0
         self.base_ang_vel[envs_idx] = 0
 
+        # reset ball
         ball_pos = np.random.uniform(
             low=[-2.19 / 2 + 0.3, -1.58 / 2 + 0.3, 0.1],
             high=[2.19 / 2 - 0.3, 1.58 / 2 - 0.3, 0.1],
             size=(len(envs_idx), 3),
         )
         self.ball.set_pos(ball_pos, zero_velocity=True, envs_idx=envs_idx)
+
+        # reset random force scale
+        self.action_scale_noise[envs_idx] = np.random.uniform(
+            self.action_scale_noise_min,
+            self.action_scale_noise_max,
+            size=(len(envs_idx), 1),
+        )
 
         # reset buffers
         self.last_actions[envs_idx] = 0.0
@@ -362,20 +380,6 @@ class RoboCupEnv(VecEnv):
             zero_velocity=False,
             envs_idx=envs_idx,
         )
-        # self.robot.set_pos(
-        #     np.array(
-        #         [
-        #             [
-        #                 self.base_pos[env_i][0],
-        #                 self.base_pos[env_i][1],
-        #                 self.base_init_pos[2],
-        #             ]
-        #             for env_i in envs_idx
-        #         ]
-        #     ),
-        #     zero_velocity=False,
-        #     envs_idx=envs_idx,
-        # )
 
     def get_attr(self, attr_name: str, indices: VecEnvIndices = None) -> list[Any]:
         """Return attribute from vectorized environment (see base class)."""
