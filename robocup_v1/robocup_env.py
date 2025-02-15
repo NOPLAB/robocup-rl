@@ -23,13 +23,14 @@ import torch
 def get_env_cfg():
     return {
         "num_actions": 2,
-        "num_obs": 2,
+        "num_obs": 4,
         "base_init_pos": [-1.0, 0.0, 0.06],
         "base_init_quat": [1.0, 0.0, 0.0, 0.0],
         "clip_actions": 1.0,
         "action_scale": 100.0,
         "action_scale_noise_min": 0.8,
         "action_scale_noise_max": 1.2,
+        "goal_width": 0.8,
         "robot": {
             "height": 0.1,
             "radius": 0.2,
@@ -169,12 +170,14 @@ class RoboCupEnv(VecEnv):
             self.rigid_solver = solver
 
         # initialize buffers
-        self.obs_buf = np.zeros((self.num_envs, self.num_obs), dtype=np.float32)
-        self.actions = np.zeros((self.num_envs, self.num_actions), dtype=np.float32)
-        self.last_actions = np.zeros_like(self.actions)
         self.action_scale = env_cfg["action_scale"]
         self.action_scale_noise_min = env_cfg["action_scale_noise_min"]
         self.action_scale_noise_max = env_cfg["action_scale_noise_max"]
+        self.goal_width = env_cfg["goal_width"]
+
+        self.obs_buf = np.zeros((self.num_envs, self.num_obs), dtype=np.float32)
+        self.actions = np.zeros((self.num_envs, self.num_actions), dtype=np.float32)
+        self.last_actions = np.zeros_like(self.actions)
         self.action_scale_noise = np.random.uniform(
             self.action_scale_noise_min,
             self.action_scale_noise_max,
@@ -242,12 +245,21 @@ class RoboCupEnv(VecEnv):
         self.base_ang_vel[:] = transform_by_quat(self.robot.get_ang(), inv_base_quat)
 
         # update observation buffer
+
         # vector about ball direction
         ball_vec = self.ball.get_pos() - self.base_pos
         ball_norm = ball_vec / torch.linalg.norm(ball_vec, axis=1, keepdims=True)
 
+        # goal direction
+        goal_vec = (
+            torch.tensor([2.19 / 2, 0.0, 0.0], device=self.device) - self.base_pos
+        )
+        goal_norm = goal_vec / torch.linalg.norm(goal_vec, axis=1, keepdims=True)
+
         self.obs_buf[:, 0] = ball_norm[:, 0].cpu().numpy()
         self.obs_buf[:, 1] = ball_norm[:, 1].cpu().numpy()
+        self.obs_buf[:, 2] = goal_norm[:, 0].cpu().numpy()
+        self.obs_buf[:, 3] = goal_norm[:, 1].cpu().numpy()
 
         # update last actions
         self.last_actions = self.actions
@@ -347,7 +359,14 @@ class RoboCupEnv(VecEnv):
 
     def _reward_goal(self):
         ball_pos = self.ball.get_pos()
-        return torch.where(ball_pos[:, 0] > 2.19 / 2, 5.0, 0.0)
+        return torch.where(
+            torch.logical_and(
+                torch.abs(ball_pos[:, 0]) < 2.19 / 2,
+                torch.abs(ball_pos[:, 1]) < self.goal_width / 2,
+            ),
+            5.0,
+            0.0,
+        )
 
     def _reward_touch_ball(self):
         ball_pos = self.ball.get_pos()
