@@ -223,6 +223,7 @@ class RoboCupEnv(VecEnv):
         exec_actions *= self.action_scale
         exec_actions *= self.action_scale_noise
 
+        # apply actions
         force = [[[a[0], a[1], 0.0]] for a in exec_actions]
         self.rigid_solver.apply_links_external_force(
             force=force,
@@ -231,6 +232,26 @@ class RoboCupEnv(VecEnv):
         )
 
         self.lock_robot_quat(np.arange(self.num_envs))
+
+        # kicker if robots near the ball, apply force to the ball
+        ball_vec = self.ball_pos - self.base_pos
+        ball_norm = ball_vec / torch.linalg.norm(ball_vec, axis=1, keepdims=True)
+        apply_envs = (
+            torch.logical_and(
+                torch.abs(ball_norm[:, 1]) < 0.2,
+                torch.logical_and(ball_vec[:, 0] > 0, ball_vec[:, 0] < 0.2),
+            )
+            .nonzero(as_tuple=False)
+            .flatten()
+        )
+        if len(apply_envs) > 0:
+            force = torch.zeros((len(apply_envs), 1, 3), device=self.device)
+            force[:, 0, 0] = 10.0
+            self.rigid_solver.apply_links_external_force(
+                force=force,
+                links_idx=[self.ball.idx],
+                envs_idx=apply_envs,
+            )
 
         self.scene.step()
 
