@@ -30,7 +30,7 @@ def get_env_cfg():
         "action_scale": 50.0,
         "action_scale_noise_min": 0.8,
         "action_scale_noise_max": 1.2,
-        "goal_width": 0.8,
+        "goal_width": 1.58,
         "robot": {
             "height": 0.1,
             "radius": 0.1,
@@ -178,10 +178,13 @@ class RoboCupEnv(VecEnv):
         self.obs_buf = np.zeros((self.num_envs, self.num_obs), dtype=np.float32)
         self.actions = np.zeros((self.num_envs, self.num_actions), dtype=np.float32)
         self.last_actions = np.zeros_like(self.actions)
-        self.action_scale_noise = np.random.uniform(
-            self.action_scale_noise_min,
-            self.action_scale_noise_max,
-            size=(self.num_envs, 1),
+        self.action_scale_noise = (
+            np.random.uniform(
+                self.action_scale_noise_min,
+                self.action_scale_noise_max,
+                size=(self.num_envs, 1),
+            )
+            * self.action_scale
         )
         self.episode_reward_sums = np.zeros((self.num_envs,), dtype=np.float32)
 
@@ -220,11 +223,16 @@ class RoboCupEnv(VecEnv):
         exec_actions = (
             self.last_actions if self.simulate_action_latency else self.actions
         )
-        exec_actions *= self.action_scale
+
+        # normalize actions
+        actions_norm = np.linalg.norm(exec_actions, axis=1, keepdims=True)
+        if actions_norm.all() > 0.0:
+            exec_actions /= actions_norm
+
         exec_actions *= self.action_scale_noise
 
         # apply actions
-        force = [[[a[0], a[1], 0.0]] for a in exec_actions]
+        force = [[[act[0], act[1], 0.0]] for act in exec_actions]
         self.rigid_solver.apply_links_external_force(
             force=force,
             links_idx=[self.robot.idx],
@@ -235,22 +243,22 @@ class RoboCupEnv(VecEnv):
 
         # kicker if robots near the ball, apply force to the ball
         ball_vec = self.ball_pos - self.base_pos
-        ball_norm = ball_vec / torch.linalg.norm(ball_vec, axis=1, keepdims=True)
-        apply_envs = (
+        ball_norm = ball_vec / torch.linalg.norm(ball_vec, axis=1, keepdim=True)
+        kicker_envs = (
             torch.logical_and(
-                torch.abs(ball_norm[:, 1]) < 0.2,
+                torch.abs(ball_norm[:, 1]) < 0.1,
                 torch.logical_and(ball_vec[:, 0] > 0, ball_vec[:, 0] < 0.2),
             )
             .nonzero(as_tuple=False)
             .flatten()
         )
-        if len(apply_envs) > 0:
-            force = torch.zeros((len(apply_envs), 1, 3), device=self.device)
+        if len(kicker_envs) > 0:
+            force = torch.zeros((len(kicker_envs), 1, 3), device=self.device)
             force[:, 0, 0] = 10.0
             self.rigid_solver.apply_links_external_force(
                 force=force,
                 links_idx=[self.ball.idx],
-                envs_idx=apply_envs,
+                envs_idx=kicker_envs,
             )
 
         self.scene.step()
@@ -275,13 +283,13 @@ class RoboCupEnv(VecEnv):
 
         # vector about ball direction
         ball_vec = self.ball_pos - self.base_pos
-        ball_norm = ball_vec / torch.linalg.norm(ball_vec, axis=1, keepdims=True)
+        ball_norm = ball_vec / torch.linalg.norm(ball_vec, axis=1, keepdim=True)
 
         # goal direction
         goal_vec = (
             torch.tensor([2.19 / 2, 0.0, 0.0], device=self.device) - self.base_pos
         )
-        goal_norm = goal_vec / torch.linalg.norm(goal_vec, axis=1, keepdims=True)
+        goal_norm = goal_vec / torch.linalg.norm(goal_vec, axis=1, keepdim=True)
 
         self.obs_buf[:, 0] = ball_norm[:, 0].cpu().numpy()
         self.obs_buf[:, 1] = ball_norm[:, 1].cpu().numpy()
@@ -295,12 +303,15 @@ class RoboCupEnv(VecEnv):
         self.rewards[:] = 0.0
         self.rewards += self._reward_every_step()
         self.rewards += self._reward_goal()
-        # self.rewards += self._reward_touch_ball()
+        self.rewards += self._reward_touch_ball()
         self.rewards += self._reward_near_ball()
+        self.rewards += self._reward_over_ball()
         self.rewards += self._reward_ball_leave_learning_space_x()
         self.rewards += self._reward_ball_leave_learning_space_y()
         self.rewards += self._reward_robot_leave_learning_space_x()
-        self.rewards += self._reward_robot_leave_learning_space_y()
+        # self.rewards += self._reward_robot_leave_learning_space_y()
+        # kicker
+        self.rewards[kicker_envs] += 5.0
 
         rewards_cpu = self.rewards.cpu().numpy()
 
@@ -314,7 +325,7 @@ class RoboCupEnv(VecEnv):
         self.dones |= self._reward_ball_leave_learning_space_x() != 0.0
         self.dones |= self._reward_ball_leave_learning_space_y() != 0.0
         self.dones |= self._reward_robot_leave_learning_space_x() != 0.0
-        self.dones |= self._reward_robot_leave_learning_space_y() != 0.0
+        # self.dones |= self._reward_robot_leave_learning_space_y() != 0.0
 
         dones_cpu = self.dones.cpu().numpy()
 
@@ -374,10 +385,13 @@ class RoboCupEnv(VecEnv):
         )
 
         # reset random force scale
-        self.action_scale_noise[envs_idx] = np.random.uniform(
-            self.action_scale_noise_min,
-            self.action_scale_noise_max,
-            size=(len(envs_idx), 1),
+        self.action_scale_noise[envs_idx] = (
+            np.random.uniform(
+                self.action_scale_noise_min,
+                self.action_scale_noise_max,
+                size=(len(envs_idx), 1),
+            )
+            * self.action_scale
         )
 
         # reset buffers
@@ -394,44 +408,51 @@ class RoboCupEnv(VecEnv):
         pass
 
     def _reward_every_step(self):
-        return -0.02
+        return -0.01
 
     def _reward_goal(self):
         return torch.where(
             torch.logical_and(
-                self.ball_pos[:, 0] > 2.19 / 2,
+                self.ball_pos[:, 0] > 2.19 / 2 - 0.2,
                 torch.abs(self.ball_pos[:, 1]) < self.goal_width / 2,
             ),
-            5.0,
+            10.0,
             0.0,
         )
 
     def _reward_touch_ball(self):
         dist = torch.linalg.norm(self.ball_pos - self.base_pos, axis=1)
-        return torch.where(dist < 0.3, 10.0, 0.0)
+        return torch.where(dist < 0.3, 0.01, 0.0)
 
     def _reward_near_ball(self):
         dist = torch.linalg.norm(self.ball_pos - self.base_pos, axis=1)
         return (1.0 / dist) / 50.0
 
+    def _reward_over_ball(self):
+        return torch.where(
+            (self.ball_pos - self.base_pos)[:, 0] > 0.0,
+            0.01,
+            0.0,
+        )
+
     def _reward_ball_leave_learning_space_x(self):
         return torch.where(
             torch.abs(self.ball_pos[:, 0]) > 2.19 / 2 - 0.1,
-            -2.0,
+            -5.0,
             0.0,
         )
 
     def _reward_ball_leave_learning_space_y(self):
         return torch.where(
             torch.abs(self.ball_pos[:, 1]) > 1.58 / 2 - 0.1,
-            -2.0,
+            -5.0,
             0.0,
         )
 
     def _reward_robot_leave_learning_space_x(self):
         return torch.where(
             torch.abs(self.base_pos[:, 0]) > 2.19 / 2 - 0.1,
-            -5.0,
+            -3.0,
             0.0,
         )
 
