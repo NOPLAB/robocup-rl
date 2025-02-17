@@ -27,7 +27,7 @@ def get_env_cfg():
         "base_init_pos": [-1.0, 0.0, 0.06],
         "base_init_quat": [1.0, 0.0, 0.0, 0.0],
         "clip_actions": 1.0,
-        "action_scale": 50.0,
+        "action_scale": 2.0,
         "action_scale_noise_min": 0.8,
         "action_scale_noise_max": 1.2,
         "goal_width": 1.58,
@@ -231,11 +231,9 @@ class RoboCupEnv(VecEnv):
 
         exec_actions *= self.action_scale_noise
 
-        # apply actions
-        force = [[[act[0], act[1], 0.0]] for act in exec_actions]
-        self.rigid_solver.apply_links_external_force(
-            force=force,
-            links_idx=[self.robot.idx],
+        self.robot.set_dofs_velocity(
+            velocity=torch.tensor([[act[0], act[1]] for act in exec_actions]),
+            dofs_idx_local=np.arange(),
             envs_idx=np.arange(self.num_envs),
         )
 
@@ -431,7 +429,7 @@ class RoboCupEnv(VecEnv):
     def _reward_over_ball(self):
         return torch.where(
             (self.ball_pos - self.base_pos)[:, 0] > 0.0,
-            0.01,
+            0.008,
             0.0,
         )
 
@@ -451,14 +449,14 @@ class RoboCupEnv(VecEnv):
 
     def _reward_robot_leave_learning_space_x(self):
         return torch.where(
-            torch.abs(self.base_pos[:, 0]) > 2.19 / 2 - 0.1,
-            -3.0,
+            torch.abs(self.base_pos[:, 0]) > 2.19 / 2 + 0.1,
+            -5.0,
             0.0,
         )
 
     def _reward_robot_leave_learning_space_y(self):
         return torch.where(
-            torch.abs(self.base_pos[:, 1]) > 1.58 / 2 - 0.1,
+            torch.abs(self.base_pos[:, 1]) > 1.58 / 2,
             -5.0,
             0.0,
         )
