@@ -173,7 +173,9 @@ class RoboCupEnv(VecEnv):
         self.action_scale_noise_std = env_cfg["action_scale_noise_std"]
         self.obs_noise_std = env_cfg["obs_noise_std"]
 
-        self.obs_buf = np.zeros((self.num_envs, self.num_obs), dtype=np.float32)
+        self.obs_buf = torch.zeros(
+            (self.num_envs, self.num_obs), device=self.device, dtype=torch.float32
+        )
         self.actions = np.zeros((self.num_envs, self.num_actions), dtype=np.float32)
         self.last_actions = np.zeros_like(self.actions)
         self.action_scale_noise = (
@@ -229,8 +231,12 @@ class RoboCupEnv(VecEnv):
 
         exec_actions *= self.action_scale_noise
 
+        exec_actions_t = torch.as_tensor(
+            exec_actions, device=self.device, dtype=torch.float32
+        )
+
         self.robot.set_dofs_velocity(
-            velocity=torch.tensor([[act[0], act[1]] for act in exec_actions]),
+            velocity=exec_actions_t,
             dofs_idx_local=np.arange(2),
             envs_idx=np.arange(self.num_envs),
         )
@@ -287,14 +293,14 @@ class RoboCupEnv(VecEnv):
         )
         goal_norm = goal_vec / torch.linalg.norm(goal_vec, axis=1, keepdim=True)
 
-        self.obs_buf[:, 0] = ball_norm[:, 0].cpu().numpy()
-        self.obs_buf[:, 1] = ball_norm[:, 1].cpu().numpy()
-        self.obs_buf[:, 2] = goal_norm[:, 0].cpu().numpy()
-        self.obs_buf[:, 3] = goal_norm[:, 1].cpu().numpy()
+        self.obs_buf[:, 0] = ball_norm[:, 0]
+        self.obs_buf[:, 1] = ball_norm[:, 1]
+        self.obs_buf[:, 2] = goal_norm[:, 0]
+        self.obs_buf[:, 3] = goal_norm[:, 1]
 
-        self.obs_buf += np.random.normal(
-            0.0, self.obs_noise_std, self.obs_buf.shape
-        ).astype(np.float32)
+        self.obs_buf += torch.randn_like(self.obs_buf) * self.obs_noise_std
+
+        obs_out = self.obs_buf.cpu().numpy()
 
         # update last actions
         self.last_actions = self.actions
@@ -333,10 +339,10 @@ class RoboCupEnv(VecEnv):
         self.reset_idx(self.dones.nonzero(as_tuple=False).flatten().cpu().numpy())
 
         infos = []
-        infos = [{"terminal_observation": obs} for obs in self.obs_buf]
+        infos = [{"terminal_observation": obs} for obs in obs_out]
 
         return (
-            self.obs_buf,
+            obs_out,
             rewards_cpu,
             dones_cpu,
             infos,
@@ -346,17 +352,14 @@ class RoboCupEnv(VecEnv):
         if len(envs_idx) == 0:
             return
 
-        # reset base
-        self.base_pos[envs_idx] = (
-            torch.from_numpy(
-                np.random.uniform(
-                    low=[-2.19 / 2 + 0.3, -1.58 / 2 + 0.3, 0.06],
-                    high=[2.19 / 2 - 0.3, 1.58 / 2 - 0.3, 0.06],
-                    size=(len(envs_idx), 3),
-                )
-            )
-            .to(torch.float32)
-            .cuda()
+        self.base_pos[envs_idx] = torch.as_tensor(
+            np.random.uniform(
+                low=[-2.19 / 2 + 0.3, -1.58 / 2 + 0.3, 0.06],
+                high=[2.19 / 2 - 0.3, 1.58 / 2 - 0.3, 0.06],
+                size=(len(envs_idx), 3),
+            ),
+            dtype=torch.float32,
+            device=self.device,
         )
         self.robot.set_pos(
             self.base_pos[envs_idx], zero_velocity=True, envs_idx=envs_idx
@@ -368,17 +371,14 @@ class RoboCupEnv(VecEnv):
         self.base_lin_vel[envs_idx] = 0
         self.base_ang_vel[envs_idx] = 0
 
-        # reset ball
-        self.ball_pos[envs_idx] = (
-            torch.from_numpy(
-                np.random.uniform(
-                    low=[-2.19 / 2 + 0.3, -1.58 / 2 + 0.3, 0.1],
-                    high=[2.19 / 2 - 0.3, 1.58 / 2 - 0.3, 0.1],
-                    size=(len(envs_idx), 3),
-                )
-            )
-            .to(torch.float32)
-            .cuda()
+        self.ball_pos[envs_idx] = torch.as_tensor(
+            np.random.uniform(
+                low=[-2.19 / 2 + 0.3, -1.58 / 2 + 0.3, 0.1],
+                high=[2.19 / 2 - 0.3, 1.58 / 2 - 0.3, 0.1],
+                size=(len(envs_idx), 3),
+            ),
+            dtype=torch.float32,
+            device=self.device,
         )
         self.ball.set_pos(
             self.ball_pos[envs_idx], zero_velocity=True, envs_idx=envs_idx
@@ -398,11 +398,12 @@ class RoboCupEnv(VecEnv):
         self.last_actions[envs_idx] = 0.0
         self.episode_length_buf[envs_idx] = 0
         self.episode_reward_sums[envs_idx] = 0.0
+        self.obs_buf[envs_idx] = 0.0
 
     def reset(self) -> VecEnvObs:
         self.reset_idx(np.arange(self.num_envs))
 
-        return self.obs_buf
+        return self.obs_buf.cpu().numpy()
 
     def close(self):
         pass
