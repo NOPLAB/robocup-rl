@@ -27,10 +27,9 @@ def get_env_cfg():
         "base_init_pos": [-1.0, 0.0, 0.06],
         "base_init_quat": [1.0, 0.0, 0.0, 0.0],
         "clip_actions": 1.0,
-        "action_scale": 2.0,
-        "action_scale_noise_min": 0.8,
-        "action_scale_noise_max": 1.2,
-        "goal_width": 1.58,
+        "action_scale": 1.5,
+        "action_scale_noise_std": 0.2,
+        "obs_noise_std": 0.01,
         "robot": {
             "height": 0.1,
             "radius": 0.1,
@@ -171,17 +170,16 @@ class RoboCupEnv(VecEnv):
 
         # initialize buffers
         self.action_scale = env_cfg["action_scale"]
-        self.action_scale_noise_min = env_cfg["action_scale_noise_min"]
-        self.action_scale_noise_max = env_cfg["action_scale_noise_max"]
-        self.goal_width = env_cfg["goal_width"]
+        self.action_scale_noise_std = env_cfg["action_scale_noise_std"]
+        self.obs_noise_std = env_cfg["obs_noise_std"]
 
         self.obs_buf = np.zeros((self.num_envs, self.num_obs), dtype=np.float32)
         self.actions = np.zeros((self.num_envs, self.num_actions), dtype=np.float32)
         self.last_actions = np.zeros_like(self.actions)
         self.action_scale_noise = (
-            np.random.uniform(
-                self.action_scale_noise_min,
-                self.action_scale_noise_max,
+            np.random.normal(
+                1.0,
+                self.action_scale_noise_std,
                 size=(self.num_envs, 1),
             )
             * self.action_scale
@@ -233,7 +231,7 @@ class RoboCupEnv(VecEnv):
 
         self.robot.set_dofs_velocity(
             velocity=torch.tensor([[act[0], act[1]] for act in exec_actions]),
-            dofs_idx_local=np.arange(),
+            dofs_idx_local=np.arange(2),
             envs_idx=np.arange(self.num_envs),
         )
 
@@ -293,6 +291,10 @@ class RoboCupEnv(VecEnv):
         self.obs_buf[:, 1] = ball_norm[:, 1].cpu().numpy()
         self.obs_buf[:, 2] = goal_norm[:, 0].cpu().numpy()
         self.obs_buf[:, 3] = goal_norm[:, 1].cpu().numpy()
+
+        self.obs_buf += np.random.normal(
+            0.0, self.obs_noise_std, self.obs_buf.shape
+        ).astype(np.float32)
 
         # update last actions
         self.last_actions = self.actions
@@ -384,9 +386,9 @@ class RoboCupEnv(VecEnv):
 
         # reset random force scale
         self.action_scale_noise[envs_idx] = (
-            np.random.uniform(
-                self.action_scale_noise_min,
-                self.action_scale_noise_max,
+            np.random.normal(
+                1.0,
+                self.action_scale_noise_std,
                 size=(len(envs_idx), 1),
             )
             * self.action_scale
@@ -410,17 +412,16 @@ class RoboCupEnv(VecEnv):
 
     def _reward_goal(self):
         return torch.where(
-            torch.logical_and(
-                self.ball_pos[:, 0] > 2.19 / 2 - 0.2,
-                torch.abs(self.ball_pos[:, 1]) < self.goal_width / 2,
-            ),
-            10.0,
+            self.ball_pos[:, 0] > 2.19 / 2 - 0.2,
+            10.0
+            - (torch.abs(self.ball_pos[:, 1]) / (1.58 / 2.0))
+            * 10.0,  # reward proportional to the distance from the center of the goal
             0.0,
         )
 
     def _reward_touch_ball(self):
         dist = torch.linalg.norm(self.ball_pos - self.base_pos, axis=1)
-        return torch.where(dist < 0.3, 0.01, 0.0)
+        return torch.where(dist < 0.3, 0.05, 0.0)
 
     def _reward_near_ball(self):
         dist = torch.linalg.norm(self.ball_pos - self.base_pos, axis=1)
